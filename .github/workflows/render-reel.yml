@@ -91,5 +91,5 @@ name: Auth to Google
   run: |
     gsutil -h "Content-Type:video/mp4" \
            -h "Cache-Control:public, max-age=3600" \
-           cp -a public-read reel.mp4 gs://YOUR_PROJECT.appspot.com/audio/reels/reel.mp4
+           cp -a public-read reel.mp4 gs://encyclomedia-news02.firebasestorage.app/files/audio/reels/reel.mp4
 
