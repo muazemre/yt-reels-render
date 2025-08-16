@@ -12,47 +12,57 @@ on:
       out_name:
         description: "Base file name (no extension)"
         required: true
-      bucket:
-        description: "Firebase Storage bucket, e.g. your-project.appspot.com"
+      bucket_gcs:
+        description: "GCS bucket name (NOT the download domain)"
         required: true
+        default: "encyclomedia-news02.firebasestorage.app"
       webhook_url:
         description: "n8n Webhook (production URL) to call back when done"
         required: true
+      fb_download_domain:
+        description: "Optional Firebase download domain (e.g. encyclomedia-news02.firebasestorage.app)"
+        required: false
+        default: "encyclomedia-news02.firebasestorage.app"
 
 jobs:
   render:
     runs-on: ubuntu-latest
+
     steps:
       - name: Install ffmpeg & tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg curl jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg curl jq
 
       - name: Download inputs
         env:
           AUDIO_URL: ${{ inputs.audio_url }}
           IMAGE_URL: ${{ inputs.image_url }}
         run: |
-          curl -L "$AUDIO_URL" -o audio
-          curl -L "$IMAGE_URL" -o image
+          set -e
+          curl -Lf "$AUDIO_URL" -o audio_in
+          curl -Lf "$IMAGE_URL" -o image_in
 
-      - name: Ensure MP3 (convert if WAV/PCM)
+      - name: Convert audio to MP3 (always)
         run: |
-          if ffprobe -v error -show_streams -of json audio | jq -e '.streams[]|select(.codec_type=="audio" and (.codec_name=="pcm_s16le" or .codec_name=="pcm_s24le" or .codec_name=="wav"))' >/dev/null; then
-            ffmpeg -y -i audio -c:a libmp3lame -q:a 2 audio.mp3
-          else
-            mv audio audio.mp3
-          fi
+          set -e
+          ffmpeg -y -i audio_in -vn -c:a libmp3lame -q:a 2 audio.mp3
 
-      - name: Render 1080x1920 MP4
+      - name: Render vertical MP4 (1080x1920)
         env:
           OUT: ${{ inputs.out_name }}.mp4
         run: |
-          ffmpeg -y -loop 1 -i image -i audio.mp3 \
+          set -e
+          ffmpeg -y \
+            -loop 1 -i image_in \
+            -i audio.mp3 \
             -tune stillimage -r 30 \
             -vf "scale=1080:-2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p" \
             -c:v libx264 -preset veryfast -crf 18 \
             -c:a aac -b:a 128k -ar 44100 -ac 2 \
             -shortest "$OUT"
 
+      # ---- Firebase auth (uses repo secret FIREBASE_SERVICE_ACCOUNT) ----
       - name: Auth to Google
         uses: google-github-actions/auth@v2
         with:
@@ -61,35 +71,40 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Upload to Firebase Storage (public)
+      # Bucket is already public → no token or per-object ACL needed.
+      - name: Upload to Firebase Storage (public bucket)
         env:
-          BUCKET: ${{ inputs.bucket }}
+          BUCKET_GCS: ${{ inputs.bucket_gcs }}
           OUT: ${{ inputs.out_name }}.mp4
         run: |
-          gsutil -h "Content-Type:video/mp4" -h "Cache-Control:public, max-age=3600" cp -a public-read "$OUT" "gs://$BUCKET/audio/reels/$OUT"
-          echo "PUBLIC_URL=https://storage.googleapis.com/$BUCKET/audio/reels/$OUT" >> $GITHUB_ENV
+          set -e
+          gsutil -h "Content-Type:video/mp4" \
+                 -h "Cache-Control:public, max-age=3600" \
+                 cp "$OUT" "gs://$BUCKET_GCS/audio/reels/$OUT"
+
+          # Build both URL styles
+          echo "PUBLIC_URL_GCS=https://storage.googleapis.com/$BUCKET_GCS/audio/reels/$OUT" >> $GITHUB_ENV
+
+          if [ -n "${{ inputs.fb_download_domain }}" ]; then
+            ENCODED_PATH=$(jq -rn --arg p "audio/reels/$OUT" '$p|@uri')
+            echo "PUBLIC_URL_FB=https://${{ inputs.fb_download_domain }}/o/$ENCODED_PATH?alt=media" >> $GITHUB_ENV
+          fi
 
       - name: Callback n8n
         env:
           WEBHOOK_URL: ${{ inputs.webhook_url }}
           OUTNAME: ${{ inputs.out_name }}
-          BUCKET: ${{ inputs.bucket }}
         run: |
-          curl -s -X POST "$WEBHOOK_URL" -H "Content-Type: application/json" \
-            -d "$(jq -n --arg id "$OUTNAME" --arg url "$PUBLIC_URL" --arg path "/audio/reels/$OUTNAME.mp4" '{status:"done", id:$id, url:$url, storagePath:$path}')"
+          set -e
+          # Prefer Firebase download domain if provided; otherwise use GCS link
+          URL="${PUBLIC_URL_FB:-$PUBLIC_URL_GCS}"
 
-name: Auth to Google
-  uses: google-github-actions/auth@v2
-  with:
-    credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-
-- name: Setup gcloud
-  uses: google-github-actions/setup-gcloud@v2
-
-# now gsutil/gcloud are authenticated; e.g., upload an MP4:
-- name: Upload to Firebase Storage
-  run: |
-    gsutil -h "Content-Type:video/mp4" \
-           -h "Cache-Control:public, max-age=3600" \
-           cp -a public-read reel.mp4 gs://encyclomedia-news02.firebasestorage.app/files/audio/reels/reel.mp4
-
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+                 --arg id "$OUTNAME" \
+                 --arg url "$URL" \
+                 --arg gcsUrl "$PUBLIC_URL_GCS" \
+                 --arg fbUrl "${PUBLIC_URL_FB:-}" \
+                 --arg path "/audio/reels/$OUTNAME.mp4" \
+                 '{status:"done", id:$id, url:$url, gcsUrl:$gcsUrl, fbUrl:$fbUrl, storagePath:$path}')"
