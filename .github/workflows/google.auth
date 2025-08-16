@@ -1,14 +1,1 @@
-- name: Auth to Google
-  uses: google-github-actions/auth@v2
-  with:
-    credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
-- name: Setup gcloud
-  uses: google-github-actions/setup-gcloud@v2
-
-# now gsutil/gcloud are authenticated; e.g., upload an MP4:
-- name: Upload to Firebase Storage
-  run: |
-    gsutil -h "Content-Type:video/mp4" \
-           -h "Cache-Control:public, max-age=3600" \
-           cp -a public-read reel.mp4 gs://YOUR_PROJECT.appspot.com/audio/reels/reel.mp4
