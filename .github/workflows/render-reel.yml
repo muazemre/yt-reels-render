@@ -62,7 +62,6 @@ jobs:
             -c:a aac -b:a 128k -ar 44100 -ac 2 \
             -shortest "$OUT"
 
-      # ---- Firebase auth (uses repo secret FIREBASE_SERVICE_ACCOUNT) ----
       - name: Auth to Google
         uses: google-github-actions/auth@v2
         with:
@@ -71,7 +70,6 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      # Bucket is already public → no token or per-object ACL needed.
       - name: Upload to Firebase Storage (public bucket)
         env:
           BUCKET_GCS: ${{ inputs.bucket_gcs }}
@@ -82,7 +80,6 @@ jobs:
                  -h "Cache-Control:public, max-age=3600" \
                  cp "$OUT" "gs://$BUCKET_GCS/audio/reels/$OUT"
 
-          # Build both URL styles
           echo "PUBLIC_URL_GCS=https://storage.googleapis.com/$BUCKET_GCS/audio/reels/$OUT" >> $GITHUB_ENV
 
           if [ -n "${{ inputs.fb_download_domain }}" ]; then
@@ -96,9 +93,7 @@ jobs:
           OUTNAME: ${{ inputs.out_name }}
         run: |
           set -e
-          # Prefer Firebase download domain if provided; otherwise use GCS link
           URL="${PUBLIC_URL_FB:-$PUBLIC_URL_GCS}"
-
           curl -s -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
@@ -108,3 +103,4 @@ jobs:
                  --arg fbUrl "${PUBLIC_URL_FB:-}" \
                  --arg path "/audio/reels/$OUTNAME.mp4" \
                  '{status:"done", id:$id, url:$url, gcsUrl:$gcsUrl, fbUrl:$fbUrl, storagePath:$path}')"
+
