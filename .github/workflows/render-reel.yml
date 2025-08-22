@@ -57,7 +57,7 @@ jobs:
             -loop 1 -i image_in \
             -i audio.mp3 \
             -tune stillimage -r 30 \
-            -vf "scale=1080:-2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p" \
+            -vf "scale=w=1080:h=1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p" \
             -c:v libx264 -preset veryfast -crf 18 \
             -c:a aac -b:a 128k -ar 44100 -ac 2 \
             -shortest "$OUT"
